@@ -4,7 +4,7 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 pid_dir="$project_dir/runtime/pids"
 
-for name in cloudflared frontend strategy worker backend; do
+for name in cloudflared keep-awake frontend strategy worker backend; do
   pid_file="$pid_dir/$name.pid"
   if [[ ! -f "$pid_file" ]]; then
     continue

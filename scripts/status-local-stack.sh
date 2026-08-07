@@ -8,7 +8,7 @@ backend_port="${BACKEND_PORT:-8001}"
 
 echo "Blackout Quant local stack status"
 
-for name in backend worker strategy frontend cloudflared; do
+for name in backend worker strategy frontend keep-awake cloudflared; do
   pid_file="$pid_dir/$name.pid"
   if [[ -f "$pid_file" ]]; then
     pid="$(<"$pid_file")"

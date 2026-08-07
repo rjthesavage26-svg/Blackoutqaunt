@@ -8,6 +8,8 @@ pid_dir="$runtime_dir/pids"
 backend_port="${BACKEND_PORT:-8001}"
 frontend_port="${FRONTEND_PORT:-5173}"
 start_tunnel="${START_TUNNEL:-0}"
+keep_awake="${KEEP_AWAKE:-1}"
+open_dashboard="${OPEN_DASHBOARD:-1}"
 
 mkdir -p "$log_dir" "$pid_dir"
 
@@ -50,6 +52,10 @@ start_process worker env PYTHONPATH="$project_dir/backend" "$project_dir/backend
 start_process strategy env PYTHONPATH="$project_dir/backend" "$project_dir/backend/.venv/bin/python" -m app.workers.alpaca_strategy
 start_process frontend npm --prefix "$project_dir/frontend" run dev -- --host 127.0.0.1 --port "$frontend_port"
 
+if [[ "$keep_awake" == "1" ]]; then
+  start_process keep-awake caffeinate -dimsu
+fi
+
 if [[ "$start_tunnel" == "1" ]]; then
   if command -v cloudflared >/dev/null 2>&1; then
     start_process cloudflared cloudflared tunnel --url "http://127.0.0.1:$backend_port"
@@ -74,4 +80,7 @@ fi
 
 echo "dashboard=http://127.0.0.1:$frontend_port"
 echo "backend=http://127.0.0.1:$backend_port"
+if [[ "$open_dashboard" == "1" ]] && command -v open >/dev/null 2>&1; then
+  open "http://127.0.0.1:$frontend_port"
+fi
 echo "Run ./scripts/status-local-stack.sh to inspect the stack."
