@@ -1,0 +1,207 @@
+//@version=6
+strategy(title="Blackout Quant - QQQ ORB Paper Strategy", shorttitle="BQ", overlay=true, pyramiding=0, initial_capital=100000, currency=currency.USD, default_qty_type=strategy.percent_of_equity, default_qty_value=10, commission_type=strategy.commission.percent, commission_value=0.0, process_orders_on_close=true)
+
+// ============================================================================
+// Inputs
+// ============================================================================
+// Inputs are settings the learner can safely adjust from TradingView's settings
+// panel. These defaults are intentionally conservative and paper-trading only.
+atrLength = input.int(14, "ATR Length", minval=1)
+atrStopMultiplier = input.float(1.5, "ATR Stop Multiplier", minval=0.1, step=0.1)
+rewardRiskRatio = input.float(2.0, "Reward/Risk Ratio", minval=2.0, step=0.25)
+volumeAverageLength = input.int(20, "Volume Average Length", minval=1)
+volumeMultiplier = input.float(1.5, "Volume Multiplier", minval=0.1, step=0.1)
+openingRangeSession = input.session("0930-0945", "Opening Range Window")
+tradingSession = input.session("0930-1130", "Trading Window")
+sessionTimezone = input.string("America/New_York", "Session Timezone")
+paperOnlyMessage = input.string("PAPER_TRADING_ONLY", "Alert Safety Label")
+
+// ============================================================================
+// Indicators
+// ============================================================================
+// Indicators turn raw chart data into reference lines. VWAP shows the average
+// price weighted by volume. EMAs show trend direction. ATR estimates typical
+// price movement and is used to size the stop loss.
+vwapValue = ta.vwap(hlc3)
+ema50 = ta.ema(close, 50)
+ema200 = ta.ema(close, 200)
+atrValue = ta.atr(atrLength)
+volumeAverage = ta.sma(volume, volumeAverageLength)
+
+plot(vwapValue, "VWAP", color=color.new(color.blue, 0), linewidth=2)
+plot(ema50, "EMA 50", color=color.new(color.green, 0), linewidth=2)
+plot(ema200, "EMA 200", color=color.new(color.red, 0), linewidth=2)
+
+// ============================================================================
+// Session Filters
+// ============================================================================
+// Session filters make sure the strategy only studies QQQ on a 5-minute chart
+// during the New York morning window. The opening range is built during the
+// first part of the session, then entries are allowed only after that range ends.
+isQqq = syminfo.ticker == "QQQ"
+isFiveMinuteChart = timeframe.isminutes and timeframe.multiplier == 5
+isTradingSession = not na(time(timeframe.period, tradingSession, sessionTimezone))
+isOpeningRangeSession = not na(time(timeframe.period, openingRangeSession, sessionTimezone))
+isNewTradingSession = isTradingSession and not isTradingSession[1]
+
+var float openingRangeHigh = na
+var float openingRangeLow = na
+
+if isNewTradingSession
+    openingRangeHigh := na
+    openingRangeLow := na
+
+if isOpeningRangeSession
+    openingRangeHigh := na(openingRangeHigh) ? high : math.max(openingRangeHigh, high)
+    openingRangeLow := na(openingRangeLow) ? low : math.min(openingRangeLow, low)
+
+plot(openingRangeHigh, "Opening Range High", color=color.new(color.lime, 0), style=plot.style_linebr)
+plot(openingRangeLow, "Opening Range Low", color=color.new(color.orange, 0), style=plot.style_linebr)
+isAfterOpeningRange = isTradingSession and not isOpeningRangeSession and not na(openingRangeHigh) and not na(openingRangeLow)
+
+// ============================================================================
+// Trend Filters
+// ============================================================================
+// Trend filters prevent the strategy from fighting the broader intraday trend.
+// Long trades need price above VWAP and EMA 50 above EMA 200. Short trades need
+// price below VWAP and EMA 50 below EMA 200.
+longTrendIsValid = close > vwapValue and ema50 > ema200
+shortTrendIsValid = close < vwapValue and ema50 < ema200
+
+// ============================================================================
+// Volume Filters
+// ============================================================================
+// Volume filters require current volume to be at least 1.5 times the 20-bar
+// average by default. This helps the learner focus on breakouts with stronger
+// participation instead of quiet, low-conviction moves.
+volumeIsValid = volume >= volumeMultiplier * volumeAverage
+
+// ============================================================================
+// Risk Management
+// ============================================================================
+// Risk management protects the paper account from overtrading. The strategy
+// allows only one open position, stops after 3 losing trades in one session, and
+// blocks new entries after a 3% intraday equity loss.
+strategy.risk.max_intraday_loss(3, strategy.percent_of_equity)
+
+var int sessionLosingTrades = 0
+var int previousClosedTrades = 0
+var float sessionStartingEquity = na
+
+if isNewTradingSession
+    sessionLosingTrades := 0
+    previousClosedTrades := strategy.closedtrades
+    sessionStartingEquity := strategy.equity
+
+if strategy.closedtrades > previousClosedTrades
+    lastTradeIndex = strategy.closedtrades - 1
+    lastTradeProfit = strategy.closedtrades.profit(lastTradeIndex)
+    if lastTradeProfit < 0
+        sessionLosingTrades += 1
+    previousClosedTrades := strategy.closedtrades
+
+dailyLossPercent = na(sessionStartingEquity) or sessionStartingEquity == 0.0 ? 0.0 : ((sessionStartingEquity - strategy.equity) / sessionStartingEquity) * 100.0
+lossCountAllowsTrading = sessionLosingTrades < 3
+dailyLossAllowsTrading = dailyLossPercent < 3.0
+onePositionAllowsTrading = strategy.position_size == 0
+environmentAllowsTrading = isQqq and isFiveMinuteChart and isTradingSession and isAfterOpeningRange
+riskAllowsTrading = lossCountAllowsTrading and dailyLossAllowsTrading and onePositionAllowsTrading
+
+// ============================================================================
+// Entry Logic
+// ============================================================================
+// Entry logic combines every hard rule into one clear yes/no decision. A long
+// needs an opening range breakout. A short needs an opening range breakdown.
+// Orders are still paper strategy orders inside TradingView, not broker orders.
+openingRangeIsReady = not na(openingRangeHigh) and not na(openingRangeLow)
+longBreakoutConfirmed = openingRangeIsReady and close > openingRangeHigh
+shortBreakdownConfirmed = openingRangeIsReady and close < openingRangeLow
+
+longEntrySignal = environmentAllowsTrading and riskAllowsTrading and longTrendIsValid and volumeIsValid and longBreakoutConfirmed
+shortEntrySignal = environmentAllowsTrading and riskAllowsTrading and shortTrendIsValid and volumeIsValid and shortBreakdownConfirmed
+
+// ============================================================================
+// Exit Logic
+// ============================================================================
+// Exit logic gives every trade both a stop loss and a take profit. The stop is
+// based on ATR, and the target is at least 2 times the amount being risked.
+var float activeStopPrice = na
+var float activeTakeProfitPrice = na
+var int lastWebhookAlertBar = na
+
+buildAlertJson(string action, string side, float entryPrice, float stopPrice, float takeProfitPrice, string reason) =>
+    "{\"project\":\"Blackout Quant\",\"safety\":\"" + paperOnlyMessage + "\",\"action\":\"" + action + "\",\"symbol\":\"" + syminfo.ticker + "\",\"side\":\"" + side + "\",\"timeframe\":\"5m\",\"session_timezone\":\"" + sessionTimezone + "\",\"price\":" + str.tostring(close, format.mintick) + ",\"entry_price\":" + str.tostring(entryPrice, format.mintick) + ",\"stop_loss\":" + str.tostring(stopPrice, format.mintick) + ",\"take_profit\":" + str.tostring(takeProfitPrice, format.mintick) + ",\"reward_risk\":" + str.tostring(rewardRiskRatio) + ",\"reason\":\"" + reason + "\"}"
+
+buildWebhookJson(string eventType, string action, float eventPrice, float stopPrice, float takeProfitPrice) =>
+    reasonCodesJson = eventType == "EXIT" ? "[\"STRATEGY_EXIT\"]" : action == "BUY" ? "[\"VWAP_LONG\",\"EMA_BULLISH\",\"ORB_BREAKOUT\",\"HIGH_VOLUME\"]" : "[\"VWAP_SHORT\",\"EMA_BEARISH\",\"ORB_BREAKDOWN\",\"HIGH_VOLUME\"]"
+    alertTime = str.format_time(time_close, "yyyy-MM-dd HH:mm:ssZ", sessionTimezone)
+    eventId = syminfo.ticker + "-" + str.tostring(time_close) + "-" + eventType + "-" + action
+    "{\"ticker\":\"" + syminfo.ticker + "\",\"action\":\"" + action + "\",\"price\":" + str.tostring(eventPrice, format.mintick) + ",\"time\":\"" + alertTime + "\",\"reason_codes\":" + reasonCodesJson + ",\"vwap\":" + str.tostring(vwapValue, format.mintick) + ",\"ema50\":" + str.tostring(ema50, format.mintick) + ",\"ema200\":" + str.tostring(ema200, format.mintick) + ",\"opening_range_high\":" + str.tostring(openingRangeHigh, format.mintick) + ",\"opening_range_low\":" + str.tostring(openingRangeLow, format.mintick) + ",\"volume\":" + str.tostring(volume) + ",\"average_volume\":" + str.tostring(volumeAverage) + ",\"atr\":" + str.tostring(atrValue, format.mintick) + ",\"stop_loss\":" + str.tostring(stopPrice, format.mintick) + ",\"take_profit\":" + str.tostring(takeProfitPrice, format.mintick) + ",\"event_type\":\"" + eventType + "\",\"event_id\":\"" + eventId + "\"}"
+
+if longEntrySignal
+    longEntryPrice = close
+    longStopPrice = longEntryPrice - (atrValue * atrStopMultiplier)
+    longRiskPerShare = longEntryPrice - longStopPrice
+    longTakeProfitPrice = longEntryPrice + (longRiskPerShare * rewardRiskRatio)
+    activeStopPrice := longStopPrice
+    activeTakeProfitPrice := longTakeProfitPrice
+    strategy.entry(id="BQ-QQQ-LONG", direction=strategy.long, alert_message=buildAlertJson("ENTRY", "LONG", longEntryPrice, longStopPrice, longTakeProfitPrice, "Opening range breakout with VWAP, EMA, and volume confirmation"))
+    if barstate.isconfirmed and lastWebhookAlertBar != bar_index
+        alert(buildWebhookJson("ENTRY", "BUY", longEntryPrice, longStopPrice, longTakeProfitPrice), alert.freq_once_per_bar_close)
+        lastWebhookAlertBar := bar_index
+
+if shortEntrySignal
+    shortEntryPrice = close
+    shortStopPrice = shortEntryPrice + (atrValue * atrStopMultiplier)
+    shortRiskPerShare = shortStopPrice - shortEntryPrice
+    shortTakeProfitPrice = shortEntryPrice - (shortRiskPerShare * rewardRiskRatio)
+    activeStopPrice := shortStopPrice
+    activeTakeProfitPrice := shortTakeProfitPrice
+    strategy.entry(id="BQ-QQQ-SHORT", direction=strategy.short, alert_message=buildAlertJson("ENTRY", "SHORT", shortEntryPrice, shortStopPrice, shortTakeProfitPrice, "Opening range breakdown with VWAP, EMA, and volume confirmation"))
+    if barstate.isconfirmed and lastWebhookAlertBar != bar_index
+        alert(buildWebhookJson("ENTRY", "SELL", shortEntryPrice, shortStopPrice, shortTakeProfitPrice), alert.freq_once_per_bar_close)
+        lastWebhookAlertBar := bar_index
+
+if strategy.position_size > 0 and not na(activeStopPrice) and not na(activeTakeProfitPrice)
+    strategy.exit(id="BQ-QQQ-LONG-EXIT", from_entry="BQ-QQQ-LONG", stop=activeStopPrice, limit=activeTakeProfitPrice, alert_message=buildAlertJson("EXIT", "LONG", strategy.position_avg_price, activeStopPrice, activeTakeProfitPrice, "Long stop loss or take profit reached"))
+
+if strategy.position_size < 0 and not na(activeStopPrice) and not na(activeTakeProfitPrice)
+    strategy.exit(id="BQ-QQQ-SHORT-EXIT", from_entry="BQ-QQQ-SHORT", stop=activeStopPrice, limit=activeTakeProfitPrice, alert_message=buildAlertJson("EXIT", "SHORT", strategy.position_avg_price, activeStopPrice, activeTakeProfitPrice, "Short stop loss or take profit reached"))
+
+positionClosed = strategy.position_size == 0 and strategy.position_size[1] != 0
+if positionClosed and barstate.isconfirmed and lastWebhookAlertBar != bar_index
+    exitAction = strategy.position_size[1] > 0 ? "SELL" : "BUY"
+    alert(buildWebhookJson("EXIT", exitAction, close, activeStopPrice, activeTakeProfitPrice), alert.freq_once_per_bar_close)
+    lastWebhookAlertBar := bar_index
+
+if strategy.position_size == 0
+    activeStopPrice := na
+    activeTakeProfitPrice := na
+
+plot(activeStopPrice, "Active Stop Loss", color=color.new(color.red, 0), style=plot.style_linebr, linewidth=2)
+plot(activeTakeProfitPrice, "Active Take Profit", color=color.new(color.green, 0), style=plot.style_linebr, linewidth=2)
+
+// ============================================================================
+// JSON Alert Generation
+// ============================================================================
+// TradingView strategy alerts should use this message:
+// {{strategy.order.alert_message}}
+//
+// The strategy.entry and strategy.exit calls above generate JSON text for each
+// simulated order event. This script does not send webhooks by itself and does
+// not automate any real-money trading.
+plotchar(longEntrySignal, "Long Entry Signal", "L", location.belowbar, color=color.new(color.green, 0), size=size.tiny)
+plotchar(shortEntrySignal, "Short Entry Signal", "S", location.abovebar, color=color.new(color.red, 0), size=size.tiny)
+
+// ============================================================================
+// Chart Warnings
+// ============================================================================
+// These visual warnings help beginners notice when the strategy is placed on the
+// wrong symbol or timeframe. They do not bypass any TradingView behavior.
+var table warningTable = table.new(position.top_right, 1, 1)
+
+warningText = not isQqq ? "Use QQQ only" : not isFiveMinuteChart ? "Use the 5-minute chart" : sessionLosingTrades >= 3 ? "Paused: 3 losing trades this session" : dailyLossPercent >= 3.0 ? "Paused: 3% daily loss reached" : "Paper strategy ready"
+warningColor = isQqq and isFiveMinuteChart and sessionLosingTrades < 3 and dailyLossPercent < 3.0 ? color.new(color.green, 75) : color.new(color.red, 70)
+
+if barstate.islast
+    table.cell(warningTable, 0, 0, warningText, bgcolor=warningColor, text_color=color.white)

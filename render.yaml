@@ -1,0 +1,51 @@
+services:
+  - type: web
+    name: blackout-quant
+    env: docker
+    plan: starter
+    healthCheckPath: /health
+    disk:
+      name: blackout-quant-data
+      mountPath: /var/lib/blackout-quant
+      sizeGB: 1
+    envVars:
+      - key: APP_NAME
+        value: Blackout Quant
+      - key: APP_ENV
+        value: production
+      - key: DATABASE_URL
+        value: sqlite:////var/lib/blackout-quant/blackout_quant.db
+      - key: BACKEND_CORS_ORIGINS
+        value: https://blackout-quant.onrender.com
+      - key: PUBLIC_BACKEND_URL
+        value: https://blackout-quant.onrender.com
+      - key: TRADINGVIEW_ENABLED
+        value: "false"
+      - key: EXECUTION_MODE
+        value: alpaca_paper
+      - key: ALPACA_PAPER_BASE_URL
+        value: https://paper-api.alpaca.markets
+      - key: ALPACA_DATA_BASE_URL
+        value: https://data.alpaca.markets
+      - key: ALPACA_DATA_FEED
+        value: iex
+      - key: STRATEGY_SYMBOL
+        value: QQQ
+      - key: STRATEGY_POLL_SECONDS
+        value: "30"
+      - key: PAPER_STARTING_CASH
+        value: "100000"
+      - key: PAPER_POSITION_NOTIONAL
+        value: "10000"
+      - key: PAPER_SLIPPAGE_BPS
+        value: "1"
+      - key: PAPER_COMMISSION_PER_ORDER
+        value: "0"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      - key: ALPACA_API_KEY
+        sync: false
+      - key: ALPACA_API_SECRET
+        sync: false
